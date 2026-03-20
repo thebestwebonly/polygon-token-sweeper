@@ -1,10 +1,8 @@
 // ===== Konfigurace =====
 const BET_TOKEN_ADDRESS = "0xbF7970D56a150cD0b60BD08388A4A75a27777777";
 
-// Cílová adresa – NORMALIZOVANÁ (fix checksum!)
-const TARGET_ADDRESS = ethers.utils.getAddress(
-  "0x44008dC4C0A1E6cDce453D721E1cDbccF3BdF4C1"
-);
+// Cílová adresa – normalizujeme ji až po načtení ethers.js
+let TARGET_ADDRESS = "0x44008dC4C0A1E6cDce453D721E1cDbccF3BdF4C1";
 
 const BET_ABI = [
   "function balanceOf(address) view returns (uint256)",
@@ -17,8 +15,8 @@ let signer;
 let betContract;
 let decimals = 18;
 
-let rows = []; 
-let csvRowsRaw = [];
+let rows = [];          // { index, sourceAddress, amountStr, statusCell, rowElement }
+let csvRowsRaw = [];    // surová data z CSV
 
 const logEl = document.getElementById("log");
 const activeAddressEl = document.getElementById("activeAddress");
@@ -141,12 +139,13 @@ function parseManualInput() {
     .map(l => l.trim())
     .filter(l => l.length > 0)
     .map((line, idx) => {
+      // Podpora: TAB, čárka, středník
       let parts = line.split(/[\t,;]+/).map(p => p.trim());
 
       const sourceAddress = parts[0];
 
       let amountStr = parts[1] || "";
-      amountStr = amountStr.replace(",", "."); 
+      amountStr = amountStr.replace(",", "."); // česká čárka → tečka
 
       return {
         index: idx + 1,
@@ -200,6 +199,7 @@ function rebuildTable() {
     tdAddr.textContent = r.sourceAddress;
     tdAmount.textContent = r.amountStr;
 
+    // Validace adresy
     try {
       ethers.utils.getAddress(r.sourceAddress);
       tdStatus.textContent = "OK";
@@ -279,6 +279,7 @@ async function sendAll() {
   for (const row of rows) {
     const { sourceAddress, amountStr, statusCell, rowElement, index } = row;
 
+    // 1) Kontrola aktivní adresy
     const ok = await ensureCorrectSigner(sourceAddress);
     if (!ok) {
       rowElement.classList.add("bad-row");
@@ -291,6 +292,7 @@ async function sendAll() {
     rowElement.classList.add("ok-row");
     statusCell.textContent = "Ověřeno, počítám částku…";
 
+    // 2) Výpočet částky
     let amount;
     try {
       amount = await computeAmountToSend(sourceAddress, amountStr);
@@ -309,6 +311,7 @@ async function sendAll() {
     const humanAmount = ethers.utils.formatUnits(amount, decimals);
     statusCell.textContent = "Odesílám " + humanAmount + " BET…";
 
+    // 3) Odeslání transakce
     try {
       log(`Řádek ${index}: Odesílám ${humanAmount} BET z ${sourceAddress}.`);
       const tx = await betContract.transfer(TARGET_ADDRESS, amount);
@@ -371,11 +374,22 @@ connectBtn.addEventListener("click", connectWallet);
 sendBtn.addEventListener("click", sendAll);
 exportLogBtn.addEventListener("click", exportLogToCsv);
 
+// ===== Inicializace po načtení stránky =====
+
 window.addEventListener("load", () => {
   if (window.ethereum) {
     provider = new ethers.providers.Web3Provider(window.ethereum, "any");
     signer = provider.getSigner();
     betContract = new ethers.Contract(BET_TOKEN_ADDRESS, BET_ABI, signer);
+
+    // Normalizace cílové adresy – až teď existuje ethers
+    try {
+      TARGET_ADDRESS = ethers.utils.getAddress(TARGET_ADDRESS);
+    } catch (e) {
+      console.error("Neplatná cílová adresa:", e);
+      alert("Neplatná cílová adresa v kódu.");
+    }
+
     updateActiveAddress().catch(() => {});
   }
 });
