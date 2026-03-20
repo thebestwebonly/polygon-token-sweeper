@@ -1,30 +1,44 @@
-let provider;
-let signer;
-let tokenContract;
-let tokenDecimals = 18;
-let addresses = [];
-let balances = {};
-let plan = []; // { address, balance, amountToSend, status, txHash, rowEl, statusEl, amountEl }
-let exportLog = []; // { address, amount, txHash, status }
+// ===== Konfigurace =====
+const BET_TOKEN_ADDRESS = "0xbF7970D56a150cD0b60BD08388A4A75a27777777";
+const TARGET_ADDRESS = "0x44008dC4C0A1E6cDce453D721E1cDbccF3BdF4C1"; // uprav podle sebe
 
-const ERC20_ABI = [
-  "function name() view returns (string)",
-  "function symbol() view returns (string)",
-  "function decimals() view returns (uint8)",
+const BET_ABI = [
   "function balanceOf(address) view returns (uint256)",
-  "function transfer(address to, uint256 amount) returns (bool)"
+  "function transfer(address to, uint256 amount) returns (bool)",
+  "function decimals() view returns (uint8)"
 ];
 
+let provider;
+let signer;
+let betContract;
+let decimals = 18;
+
+let rows = []; // { index, sourceAddress, amountStr, statusCell, rowElement }
+
+const logEl = document.getElementById("log");
+const activeAddressEl = document.getElementById("activeAddress");
+const activeAddressStatusEl = document.getElementById("activeAddressStatus");
+const addressesBodyEl = document.getElementById("addressesBody");
+const connectBtn = document.getElementById("connectBtn");
+const sendBtn = document.getElementById("sendBtn");
+const exportLogBtn = document.getElementById("exportLogBtn");
+const csvInput = document.getElementById("csvInput");
+const percentInput = document.getElementById("percentInput");
+const manualInput = document.getElementById("manualInput");
+
+let logLines = [];
+
+// ===== Logging =====
+
 function log(msg) {
-  const logsEl = document.getElementById("logs");
-  const line = document.createElement("div");
-  line.textContent = msg;
-  logsEl.prepend(line);
+  const time = new Date().toISOString().substring(11, 19);
+  const line = `[${time}] ${msg}`;
+  logLines.push(line);
+  logEl.textContent += line + "\n";
+  logEl.scrollTop = logEl.scrollHeight;
 }
 
-function isValidAddress(addr) {
-  return /^0x[a-fA-F0-9]{40}$/.test(addr.trim());
-}
+// ===== Peněženka =====
 
 async function connectWallet() {
   if (!window.ethereum) {
@@ -32,302 +46,328 @@ async function connectWallet() {
     return;
   }
 
-  await window.ethereum.request({ method: "eth_requestAccounts" });
-
-  provider = new ethers.providers.Web3Provider(window.ethereum);
+  provider = new ethers.providers.Web3Provider(window.ethereum, "any");
+  await provider.send("eth_requestAccounts", []);
   signer = provider.getSigner();
 
-  // Přepnout na Polygon
-  await window.ethereum.request({
-    method: "wallet_switchEthereumChain",
-    params: [{ chainId: "0x89" }]
-  });
+  const network = await provider.getNetwork();
+  if (network.chainId !== 137) {
+    alert("Přepni síť v Rabby na Polygon (chainId 137).");
+  }
 
-  const addr = await signer.getAddress();
-  document.getElementById("walletInfo").textContent = `Připojeno jako: ${addr}`;
-  log("Peněženka připojena a síť nastavena na Polygon.");
+  betContract = new ethers.Contract(BET_TOKEN_ADDRESS, BET_ABI, signer);
+  decimals = await betContract.decimals();
+
+  await updateActiveAddress();
+  log("Peněženka připojena.");
+  sendBtn.disabled = rows.length === 0;
 }
 
-async function loadTokenInfo() {
-  const tokenAddress = document.getElementById("tokenAddressInput").value.trim();
-  if (!isValidAddress(tokenAddress)) {
-    alert("Neplatná adresa tokenu.");
-    return;
+// ===== Aktivní adresa =====
+
+async function updateActiveAddress() {
+  if (!signer) {
+    activeAddressEl.textContent = "Nepřipojeno";
+    activeAddressStatusEl.textContent = "";
+    activeAddressStatusEl.className = "";
+    return null;
   }
 
-  if (!provider) {
-    alert("Nejprve připojte peněženku.");
-    return;
-  }
-
-  tokenContract = new ethers.Contract(tokenAddress, ERC20_ABI, provider);
   try {
-    const [name, symbol, decimals] = await Promise.all([
-      tokenContract.name(),
-      tokenContract.symbol(),
-      tokenContract.decimals()
-    ]);
-    tokenDecimals = decimals;
-    document.getElementById("tokenInfo").textContent =
-      `Token: ${name} (${symbol}), decimals: ${decimals}`;
-    log(`Načten token ${name} (${symbol}).`);
+    const active = await signer.getAddress();
+    activeAddressEl.textContent = active;
+    activeAddressStatusEl.textContent = "Aktivní adresa je načtena.";
+    activeAddressStatusEl.className = "status-ok";
+    return active;
   } catch (e) {
-    console.error(e);
-    alert("Nepodařilo se načíst informace o tokenu. Je to platný ERC‑20 na Polygonu?");
+    activeAddressEl.textContent = "Chyba při čtení adresy";
+    activeAddressStatusEl.textContent = "";
+    activeAddressStatusEl.className = "";
+    return null;
   }
 }
 
-function parseAddresses() {
-  const raw = document.getElementById("addressesInput").value.split("\n");
-  const cleaned = raw
+// Vrátí true/false podle toho, zda je aktivní adresa = zdrojová
+async function ensureCorrectSigner(sourceAddress) {
+  if (!signer) {
+    alert("Nejprve připoj peněženku.");
+    return false;
+  }
+
+  const active = await signer.getAddress();
+  if (active.toLowerCase() !== sourceAddress.toLowerCase()) {
+    activeAddressStatusEl.textContent =
+      "Aktivní adresa v Rabby neodpovídá zdrojové adrese. Přepni v Rabby na správnou adresu a klikni znovu.";
+    activeAddressStatusEl.className = "status-bad";
+
+    alert(
+      "V Rabby je aktivní jiná adresa.\n\n" +
+      "Aktivní:   " + active + "\n" +
+      "Očekávaná: " + sourceAddress + "\n\n" +
+      "Přepni v Rabby na správnou adresu a spusť odesílání znovu."
+    );
+    return false;
+  }
+
+  activeAddressStatusEl.textContent = "Aktivní adresa odpovídá zdrojové adrese.";
+  activeAddressStatusEl.className = "status-ok";
+  return true;
+}
+
+// ===== Režim odesílání =====
+
+function getMode() {
+  const radios = document.querySelectorAll('input[name="mode"]');
+  for (const r of radios) {
+    if (r.checked) return r.value;
+  }
+  return "csv";
+}
+
+// ===== Ruční vstup =====
+
+function parseManualInput() {
+  const text = manualInput.value.trim();
+  if (!text) return [];
+
+  return text
+    .split(/\r?\n/)
     .map(l => l.trim())
-    .filter(l => l.length > 0);
-
-  const unique = [...new Set(cleaned)];
-  const valid = unique.filter(isValidAddress);
-  const invalid = unique.filter(a => !isValidAddress(a));
-
-  if (invalid.length > 0) {
-    alert("Nalezeny neplatné adresy:\n" + invalid.join("\n"));
-  }
-
-  addresses = valid;
-  log(`Platných adres: ${addresses.length}`);
+    .filter(l => l.length > 0)
+    .map((line, idx) => {
+      const parts = line.split(",").map(p => p.trim());
+      return {
+        index: idx + 1,
+        sourceAddress: parts[0],
+        amountStr: parts[1] || ""
+      };
+    });
 }
 
-function getMinBalanceX() {
-  const v = document.getElementById("minBalanceInput").value;
-  const x = parseFloat(v || "0");
-  return x >= 0 ? x : 0;
-}
+// ===== CSV načtení =====
 
-function getStrategy() {
-  const radios = document.querySelectorAll("input[name='strategy']");
-  let value = "send_all";
-  radios.forEach(r => {
-    if (r.checked) value = r.value;
+let csvRowsRaw = []; // jen surová data z CSV
+
+csvInput.addEventListener("change", async (e) => {
+  const file = e.target.files[0];
+  if (!file) return;
+
+  const text = await file.text();
+  const lines = text.split(/\r?\n/).map(l => l.trim()).filter(l => l.length > 0);
+
+  csvRowsRaw = [];
+
+  lines.forEach((line, idx) => {
+    const parts = line.split(",").map(p => p.trim());
+    if (parts.length < 1) return;
+    csvRowsRaw.push({
+      index: idx + 1,
+      sourceAddress: parts[0],
+      amountStr: parts[1] || ""
+    });
   });
-  return value;
-}
 
-function getStrategyY(strategy) {
-  if (strategy === "send_all_except") {
-    return parseFloat(document.getElementById("strategyAllExceptInput").value || "0");
-  }
-  if (strategy === "send_fixed") {
-    return parseFloat(document.getElementById("strategyFixedInput").value || "0");
-  }
-  if (strategy === "send_percent") {
-    return parseFloat(document.getElementById("strategyPercentInput").value || "0");
-  }
-  if (strategy === "send_at_least") {
-    return parseFloat(document.getElementById("strategyAtLeastInput").value || "0");
-  }
-  return 0;
-}
+  log(`Načteno ${csvRowsRaw.length} řádků z CSV.`);
+  rebuildTable();
+});
 
-async function loadBalances() {
-  parseAddresses();
+// ===== Rekonstrukce tabulky z CSV + ručního vstupu =====
 
-  const targetAddress = document.getElementById("targetAddressInput").value.trim();
-  if (!isValidAddress(targetAddress)) {
-    alert("Neplatná cílová adresa.");
-    return;
-  }
+function rebuildTable() {
+  const manualRows = parseManualInput();
+  const allRows = [...manualRows, ...csvRowsRaw];
 
-  if (!provider || !signer) {
-    alert("Nejprve připojte peněženku.");
-    return;
-  }
+  addressesBodyEl.innerHTML = "";
+  rows = [];
 
-  if (!tokenContract) {
-    await loadTokenInfo();
-    if (!tokenContract) return;
-  }
-
-  if (addresses.length === 0) {
-    alert("Žádná platná adresa.");
-    return;
-  }
-
-  const minX = getMinBalanceX();
-  const strategy = getStrategy();
-  const Y = getStrategyY(strategy);
-
-  const tbody = document.querySelector("#balancesTable tbody");
-  tbody.innerHTML = "";
-  balances = {};
-  plan = [];
-  exportLog = [];
-  document.getElementById("exportCsvBtn").disabled = true;
-
-  document.getElementById("balancesStatus").textContent = "Načítám zůstatky...";
-  log("Načítám zůstatky...");
-
-  for (const addr of addresses) {
-    const balanceWei = await tokenContract.balanceOf(addr);
-    const balance = parseFloat(ethers.utils.formatUnits(balanceWei, tokenDecimals));
-    balances[addr] = balance;
-
-    const row = document.createElement("tr");
+  allRows.forEach((r, idx) => {
+    const tr = document.createElement("tr");
+    const tdIndex = document.createElement("td");
     const tdAddr = document.createElement("td");
-    const tdBal = document.createElement("td");
-    const tdX = document.createElement("td");
     const tdAmount = document.createElement("td");
     const tdStatus = document.createElement("td");
 
-    tdAddr.textContent = addr;
-    tdBal.textContent = balance.toString();
+    tdIndex.textContent = idx + 1;
+    tdAddr.textContent = r.sourceAddress;
+    tdAmount.textContent = r.amountStr;
+    tdStatus.textContent = "Čeká";
 
-    let eligible = balance >= minX;
-    tdX.textContent = eligible ? "✔" : "✖";
+    tr.appendChild(tdIndex);
+    tr.appendChild(tdAddr);
+    tr.appendChild(tdAmount);
+    tr.appendChild(tdStatus);
 
-    let amountToSend = 0;
-    if (eligible) {
-      if (strategy === "send_all") {
-        amountToSend = balance;
-      } else if (strategy === "send_all_except") {
-        amountToSend = Math.max(balance - Y, 0);
-      } else if (strategy === "send_fixed") {
-        amountToSend = Math.min(balance, Y);
-      } else if (strategy === "send_percent") {
-        amountToSend = balance * (Y / 100);
-      } else if (strategy === "send_at_least") {
-        amountToSend = balance >= Y ? Y : 0;
-      }
-    }
+    addressesBodyEl.appendChild(tr);
 
-    if (amountToSend > 0) {
-      plan.push({
-        address: addr,
-        balance,
-        amountToSend,
-        status: "Připraveno",
-        txHash: null,
-        rowEl: row,
-        statusEl: tdStatus,
-        amountEl: tdAmount
-      });
-      tdAmount.textContent = amountToSend.toString();
-      tdStatus.textContent = "Připraveno";
-    } else {
-      tdAmount.textContent = "-";
-      tdStatus.textContent = eligible ? "Nic k odeslání" : "Přeskočeno (zůstatek < X)";
-    }
+    rows.push({
+      index: idx + 1,
+      sourceAddress: r.sourceAddress,
+      amountStr: r.amountStr,
+      statusCell: tdStatus,
+      rowElement: tr
+    });
+  });
 
-    row.appendChild(tdAddr);
-    row.appendChild(tdBal);
-    row.appendChild(tdX);
-    row.appendChild(tdAmount);
-    row.appendChild(tdStatus);
-    tbody.appendChild(row);
-  }
-
-  document.getElementById("balancesStatus").textContent =
-    `Načteno. Adres k odeslání: ${plan.length}`;
-  document.getElementById("startSendingBtn").disabled = plan.length === 0;
+  sendBtn.disabled = rows.length === 0 || !signer;
 }
 
+manualInput.addEventListener("input", rebuildTable);
+
+// ===== Výpočet částky podle režimu =====
+
+async function computeAmountToSend(sourceAddress, amountStrFromCsv) {
+  const mode = getMode();
+
+  if (mode === "csv") {
+    if (!amountStrFromCsv || amountStrFromCsv.trim() === "") {
+      throw new Error("V režimu CSV chybí částka.");
+    }
+    return ethers.utils.parseUnits(amountStrFromCsv, decimals);
+  }
+
+  const balance = await betContract.balanceOf(sourceAddress);
+
+  if (mode === "all") {
+    return balance;
+  }
+
+  if (mode === "percent") {
+    const percent = parseFloat(percentInput.value || "0");
+    if (isNaN(percent) || percent <= 0 || percent > 100) {
+      throw new Error("Neplatné procento.");
+    }
+    const fraction = percent / 100;
+    const amount = balance.mul(ethers.BigNumber.from(Math.floor(fraction * 10000))).div(10000);
+    return amount;
+  }
+
+  throw new Error("Neznámý režim.");
+}
+
+// ===== Odesílání =====
+
 async function sendAll() {
-  if (!provider || !signer) {
-    alert("Nejprve připojte peněženku.");
+  if (!signer || !betContract) {
+    alert("Nejprve připoj peněženku.");
     return;
   }
 
-  const targetAddress = document.getElementById("targetAddressInput").value.trim();
-  const tokenAddress = document.getElementById("tokenAddressInput").value.trim();
-
-  if (!isValidAddress(targetAddress) || !isValidAddress(tokenAddress)) {
-    alert("Neplatná cílová nebo token adresa.");
+  if (rows.length === 0) {
+    alert("Nejsou načteny žádné adresy.");
     return;
   }
 
-  const total = plan.length;
-  let done = 0;
+  sendBtn.disabled = true;
+  log("Proces odesílání zahájen. Režim: " + getMode());
 
-  for (const item of plan) {
-    const { address, amountToSend, statusEl, amountEl } = item;
+  for (const row of rows) {
+    const { sourceAddress, amountStr, statusCell, rowElement, index } = row;
 
-    log(`Připravuje se transakce z adresy ${address} na ${amountToSend} tokenů.`);
-    statusEl.textContent = "Čeká na podpis...";
+    // 1) Kontrola, že aktivní adresa = zdrojová
+    const ok = await ensureCorrectSigner(sourceAddress);
+    if (!ok) {
+      rowElement.classList.remove("ok-row");
+      rowElement.classList.add("bad-row");
+      statusCell.textContent = "Špatná aktivní adresa v Rabby";
+      log(`Řádek ${index}: Špatná aktivní adresa v Rabby. Proces zastaven.`);
+      sendBtn.disabled = false;
+      return; // tvrdé zastavení – uživatel přepne adresu a spustí znovu
+    }
 
+    rowElement.classList.remove("bad-row");
+    rowElement.classList.add("ok-row");
+    statusCell.textContent = "Ověřeno, počítám částku…";
+
+    // 2) Výpočet částky
+    let amount;
     try {
-      const localSigner = provider.getSigner(); // uživatel musí mít přepnutý správný účet
-      const contractWithSigner = new ethers.Contract(tokenAddress, ERC20_ABI, localSigner);
-      const amountWei = ethers.utils.parseUnits(
-        amountToSend.toString(),
-        tokenDecimals
-      );
-
-      const tx = await contractWithSigner.transfer(targetAddress, amountWei);
-      log(`Odesláno, čekám na potvrzení... Tx: ${tx.hash}`);
-      const receipt = await tx.wait();
-
-      item.txHash = receipt.transactionHash;
-      item.status = "Odesláno";
-      statusEl.textContent = "Odesláno";
-      amountEl.textContent = amountToSend.toString();
-      done++;
-      document.getElementById("progress").textContent =
-        `Hotovo ${done} / ${total}`;
-
-      exportLog.push({
-        address,
-        amount: amountToSend,
-        txHash: item.txHash,
-        status: item.status
-      });
+      amount = await computeAmountToSend(sourceAddress, amountStr);
     } catch (e) {
-      console.error(e);
-      item.status = "Chyba";
-      statusEl.textContent = "Chyba (viz log)";
-      log(`Chyba při odesílání z ${address}: ${e.message}`);
+      statusCell.textContent = "Chyba částky: " + e.message;
+      log(`Řádek ${index}: Chyba částky: ${e.message}`);
+      continue;
+    }
 
-      exportLog.push({
-        address,
-        amount: amountToSend,
-        txHash: "",
-        status: "Chyba"
-      });
+    if (amount.isZero()) {
+      statusCell.textContent = "Nulová částka, přeskočeno";
+      log(`Řádek ${index}: Nulová částka, přeskočeno.`);
+      continue;
+    }
+
+    const humanAmount = ethers.utils.formatUnits(amount, decimals);
+    statusCell.textContent = "Ověřeno, odesílám " + humanAmount + " BET…";
+
+    // 3) Odeslání transakce
+    try {
+      log(`Řádek ${index}: Připravuji transakci z ${sourceAddress} na ${humanAmount} BET.`);
+      const tx = await betContract.transfer(TARGET_ADDRESS, amount);
+      log(`Řádek ${index}: Odesláno, čekám na potvrzení... Tx: ${tx.hash}`);
+      statusCell.textContent = "Odesláno, čeká na potvrzení";
+
+      const receipt = await tx.wait();
+      if (receipt.status === 1) {
+        statusCell.textContent = "Hotovo";
+        log(`Řádek ${index}: Transakce potvrzena.`);
+      } else {
+        statusCell.textContent = "Selhalo (receipt.status != 1)";
+        log(`Řádek ${index}: Transakce selhala (receipt.status != 1).`);
+      }
+    } catch (err) {
+      statusCell.textContent = "Chyba při odesílání";
+      rowElement.classList.add("bad-row");
+      log(
+        `Řádek ${index}: Chyba při odesílání z ${sourceAddress}: ${err.message || err}`
+      );
+      continue;
     }
   }
 
   log("Proces odesílání dokončen.");
-  document.getElementById("exportCsvBtn").disabled = exportLog.length === 0;
+  sendBtn.disabled = false;
 }
 
-function exportToCsv() {
-  if (!exportLog.length) {
-    alert("Žádná data k exportu.");
+// ===== Export logu do CSV =====
+
+function exportLogToCsv() {
+  if (logLines.length === 0) {
+    alert("Log je prázdný.");
     return;
   }
 
-  const header = ["address", "amount", "txHash", "status"];
-  const rows = exportLog.map(item => [
-    item.address,
-    item.amount,
-    item.txHash,
-    item.status
-  ]);
+  const header = "time,message";
+  const rowsCsv = logLines.map(line => {
+    const match = line.match(/^\[(.*?)\]\s*(.*)$/);
+    if (!match) return `,${JSON.stringify(line)}`;
+    const time = match[1];
+    const msg = match[2].replace(/"/g, '""');
+    return `"${time}","${msg}"`;
+  });
 
-  const csvContent = [header, ...rows]
-    .map(r => r.map(v => `"${String(v).replace(/"/g, '""')}"`).join(","))
-    .join("\n");
-
+  const csvContent = [header, ...rowsCsv].join("\n");
   const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
   const url = URL.createObjectURL(blob);
 
   const a = document.createElement("a");
   a.href = url;
-  a.download = "polygon-token-sweeper-log.csv";
+  a.download = "bet-sweep-log.csv";
   document.body.appendChild(a);
   a.click();
   document.body.removeChild(a);
   URL.revokeObjectURL(url);
 }
 
-document.getElementById("connectWalletBtn").addEventListener("click", connectWallet);
-document.getElementById("tokenAddressInput").addEventListener("change", loadTokenInfo);
-document.getElementById("loadBalancesBtn").addEventListener("click", loadBalances);
-document.getElementById("startSendingBtn").addEventListener("click", sendAll);
-document.getElementById("exportCsvBtn").addEventListener("click", exportToCsv);
+// ===== Eventy =====
+
+connectBtn.addEventListener("click", connectWallet);
+sendBtn.addEventListener("click", sendAll);
+exportLogBtn.addEventListener("click", exportLogToCsv);
+
+// při loadu zkusíme načíst aktivní adresu (pokud už je peněženka připojená)
+window.addEventListener("load", () => {
+  if (window.ethereum) {
+    provider = new ethers.providers.Web3Provider(window.ethereum, "any");
+    signer = provider.getSigner();
+    betContract = new ethers.Contract(BET_TOKEN_ADDRESS, BET_ABI, signer);
+    updateActiveAddress().catch(() => {});
+  }
+});
