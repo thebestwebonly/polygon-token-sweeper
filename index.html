@@ -1,0 +1,136 @@
+<!DOCTYPE html>
+<html lang="cs">
+<head>
+  <meta charset="UTF-8" />
+  <title>Polygon Token Sweeper – Many → One</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <header>
+    <h1>Polygon Token Sweeper – Many → One</h1>
+    <p>
+      Veřejná webová aplikace pro bezpečný hromadný přesun ERC‑20 tokenů
+      z více adres na jednu cílovou adresu na síti Polygon.
+    </p>
+  </header>
+
+  <main>
+    <!-- 1. Peněženka -->
+    <section id="wallet-section">
+      <h2>1. Připojení peněženky</h2>
+      <p>Připojte Rabby nebo MetaMask. Aplikace nikdy nevyžaduje seed ani privátní klíče.</p>
+      <button id="connectWalletBtn">Připojit peněženku</button>
+      <div id="walletInfo"></div>
+    </section>
+
+    <!-- 2. Vstupní data -->
+    <section id="inputs-section">
+      <h2>2. Vstupní data</h2>
+
+      <label for="addressesInput">Seznam zdrojových adres (jedna adresa na řádek):</label>
+      <textarea id="addressesInput" rows="8"
+        placeholder="0xAAA...\n0xBBB...\n0xCCC..."></textarea>
+      <small>Neplatné adresy budou ignorovány a zobrazeny v upozornění.</small>
+
+      <label for="targetAddressInput">Cílová adresa (příjemce):</label>
+      <input id="targetAddressInput" type="text" placeholder="0x..." />
+
+      <label for="tokenAddressInput">Adresa ERC‑20 tokenu (např. BET na Polygonu):</label>
+      <input id="tokenAddressInput" type="text" placeholder="0x..." />
+      <div id="tokenInfo"></div>
+    </section>
+
+    <!-- 3. Filtr a strategie -->
+    <section id="logic-section">
+      <h2>3. Filtr a strategie odesílání</h2>
+
+      <div class="field-group">
+        <label for="minBalanceInput">
+          Posílat pouze z peněženek, které mají alespoň:
+        </label>
+        <input id="minBalanceInput" type="number" min="0" step="any" value="0" />
+        <span>tokenů</span>
+        <small>(peněženky s menším zůstatkem budou přeskočeny)</small>
+      </div>
+
+      <fieldset>
+        <legend>Kolik poslat z každé peněženky:</legend>
+
+        <label><input type="radio" name="strategy" value="send_all" checked />
+          Poslat vše</label><br />
+
+        <label>
+          <input type="radio" name="strategy" value="send_all_except" />
+          Poslat vše kromě
+          <input id="strategyAllExceptInput" type="number" min="0" step="any" />
+          tokenů
+        </label><br />
+
+        <label>
+          <input type="radio" name="strategy" value="send_fixed" />
+          Poslat pevnou částku
+          <input id="strategyFixedInput" type="number" min="0" step="any" />
+          tokenů
+        </label><br />
+
+        <label>
+          <input type="radio" name="strategy" value="send_percent" />
+          Poslat procento zůstatku
+          <input id="strategyPercentInput" type="number" min="0" max="100" step="any" />
+          %
+        </label><br />
+
+        <label>
+          <input type="radio" name="strategy" value="send_at_least" />
+          Poslat nejméně
+          <input id="strategyAtLeastInput" type="number" min="0" step="any" />
+          tokenů
+        </label>
+      </fieldset>
+    </section>
+
+    <!-- 4. Zůstatky a plán -->
+    <section id="balances-section">
+      <h2>4. Načtení zůstatků a plánu odeslání</h2>
+      <button id="loadBalancesBtn">Načíst zůstatky a připravit plán</button>
+      <div id="balancesStatus"></div>
+      <table id="balancesTable">
+        <thead>
+          <tr>
+            <th>Adresa</th>
+            <th>Zůstatek</th>
+            <th>Splňuje X?</th>
+            <th>Částka k odeslání</th>
+            <th>Stav</th>
+          </tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+    </section>
+
+    <!-- 5. Odesílání -->
+    <section id="sending-section">
+      <h2>5. Odesílání transakcí</h2>
+      <button id="startSendingBtn" disabled>Zahájit odesílání</button>
+      <div id="progress"></div>
+      <button id="exportCsvBtn" disabled>Exportovat log do CSV</button>
+      <div id="logs"></div>
+    </section>
+
+    <!-- Bezpečnost -->
+    <section id="security-section">
+      <h2>Bezpečnost</h2>
+      <ul>
+        <li>Aplikace nikdy nevyžaduje seed phrase ani privátní klíče.</li>
+        <li>Veškerá logika běží pouze ve vašem prohlížeči.</li>
+        <li>Podpisy transakcí provádí výhradně vaše peněženka (Rabby / MetaMask).</li>
+        <li>Zdrojový kód je veřejný a auditovatelný.</li>
+      </ul>
+    </section>
+  </main>
+
+  <script src="https://cdn.jsdelivr.net/npm/ethers@5.7.2/dist/ethers.umd.min.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
