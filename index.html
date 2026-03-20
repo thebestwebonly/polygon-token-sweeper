@@ -25,37 +25,23 @@
   <div class="panel">
     <div class="info-box">
       <span class="info-label">Režim odesílání</span><br />
-      <label>
-        <input type="radio" name="mode" value="csv" checked />
-        Použít částku z CSV / ručního vstupu
-      </label><br />
-      <label>
-        <input type="radio" name="mode" value="all" />
-        Poslat vše (celý zůstatek)
-      </label><br />
-      <label>
-        <input type="radio" name="mode" value="percent" />
-        Poslat procento zůstatku:
-      </label>
+      <label><input type="radio" name="mode" value="csv" checked /> Použít částku z CSV / ručního vstupu</label><br />
+      <label><input type="radio" name="mode" value="all" /> Poslat vše (celý zůstatek)</label><br />
+      <label><input type="radio" name="mode" value="percent" /> Poslat procento zůstatku:</label>
       <input type="number" id="percentInput" value="50" min="1" max="100" style="width: 70px;" /> %
     </div>
 
     <div class="info-box">
       <span class="info-label">CSV se zdrojovými adresami a částkami</span><br />
-      <small>
-        Formát: <code>address,amount</code> (amount v BET, např. <code>0x123...,130000</code>)<br />
-        V režimu „Poslat vše“ a „Procento“ se druhý sloupec ignoruje.
-      </small><br />
+      <small>Formát: <code>address,amount</code> (amount v BET, např. <code>0x123...,130000</code>)<br />
+      V režimu „Poslat vše“ a „Procento“ se druhý sloupec ignoruje.</small><br />
       <input type="file" id="csvInput" accept=".csv" />
     </div>
 
     <div class="info-box">
       <span class="info-label">Ruční vložení adres</span><br />
-      <small>
-        Každý řádek: <code>address,amount</code><br />
-        Amount může být prázdné v režimu „Poslat vše“ / „Procento“.
-      </small><br />
-      <textarea id="manualInput" placeholder="0x123...,130000&#10;0x456...,50000" style="width:100%;height:120px;margin-top:6px;"></textarea>
+      <small>Podporované oddělovače: čárka, středník, TAB. Amount může být prázdné.</small><br />
+      <textarea id="manualInput" placeholder="0x123...,130000&#10;0x456...&#9;1472,728108" style="width:100%;height:120px;margin-top:6px;"></textarea>
     </div>
 
     <table id="addressesTable">
@@ -67,9 +53,7 @@
           <th>Stav adresy</th>
         </tr>
       </thead>
-      <tbody id="addressesBody">
-        <!-- řádky se doplní dynamicky -->
-      </tbody>
+      <tbody id="addressesBody"></tbody>
     </table>
 
     <div class="actions">
@@ -79,9 +63,7 @@
   </div>
 
   <div class="panel">
-    <div class="info-box">
-      <span class="info-label">Log</span>
-    </div>
+    <div class="info-box"><span class="info-label">Log</span></div>
     <div id="log" class="log"></div>
   </div>
 
