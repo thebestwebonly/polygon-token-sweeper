@@ -1,6 +1,6 @@
 // ===== Konfigurace =====
 const BET_TOKEN_ADDRESS = "0xbF7970D56a150cD0b60BD08388A4A75a27777777";
-const TARGET_ADDRESS = "0x44008dC4C0A1E6cDce453D721E1cDbccF3BdF4C1"; // uprav podle sebe
+const TARGET_ADDRESS = "0x44008dC4C0A1E6cDce453D721E1cDbccF3BdF4C1";
 
 const BET_ABI = [
   "function balanceOf(address) view returns (uint256)",
@@ -14,6 +14,7 @@ let betContract;
 let decimals = 18;
 
 let rows = []; // { index, sourceAddress, amountStr, statusCell, rowElement }
+let csvRowsRaw = [];
 
 const logEl = document.getElementById("log");
 const activeAddressEl = document.getElementById("activeAddress");
@@ -87,7 +88,8 @@ async function updateActiveAddress() {
   }
 }
 
-// Vrátí true/false podle toho, zda je aktivní adresa = zdrojová
+// ===== Kontrola správné adresy =====
+
 async function ensureCorrectSigner(sourceAddress) {
   if (!signer) {
     alert("Nejprve připoj peněženku.");
@@ -97,7 +99,7 @@ async function ensureCorrectSigner(sourceAddress) {
   const active = await signer.getAddress();
   if (active.toLowerCase() !== sourceAddress.toLowerCase()) {
     activeAddressStatusEl.textContent =
-      "Aktivní adresa v Rabby neodpovídá zdrojové adrese. Přepni v Rabby na správnou adresu a klikni znovu.";
+      "Aktivní adresa v Rabby neodpovídá zdrojové adrese. Přepni v Rabby na správnou adresu.";
     activeAddressStatusEl.className = "status-bad";
 
     alert(
@@ -124,7 +126,7 @@ function getMode() {
   return "csv";
 }
 
-// ===== Ruční vstup =====
+// ===== Robustní parser ručního vstupu =====
 
 function parseManualInput() {
   const text = manualInput.value.trim();
@@ -135,18 +137,23 @@ function parseManualInput() {
     .map(l => l.trim())
     .filter(l => l.length > 0)
     .map((line, idx) => {
-      const parts = line.split(",").map(p => p.trim());
+      // Podpora: TAB, čárka, středník
+      let parts = line.split(/[\t,;]+/).map(p => p.trim());
+
+      const sourceAddress = parts[0];
+
+      let amountStr = parts[1] || "";
+      amountStr = amountStr.replace(",", "."); // česká čárka → tečka
+
       return {
         index: idx + 1,
-        sourceAddress: parts[0],
-        amountStr: parts[1] || ""
+        sourceAddress,
+        amountStr
       };
     });
 }
 
 // ===== CSV načtení =====
-
-let csvRowsRaw = []; // jen surová data z CSV
 
 csvInput.addEventListener("change", async (e) => {
   const file = e.target.files[0];
@@ -158,12 +165,11 @@ csvInput.addEventListener("change", async (e) => {
   csvRowsRaw = [];
 
   lines.forEach((line, idx) => {
-    const parts = line.split(",").map(p => p.trim());
-    if (parts.length < 1) return;
+    const parts = line.split(/[\t,;]+/).map(p => p.trim());
     csvRowsRaw.push({
       index: idx + 1,
       sourceAddress: parts[0],
-      amountStr: parts[1] || ""
+      amountStr: (parts[1] || "").replace(",", ".")
     });
   });
 
@@ -171,7 +177,7 @@ csvInput.addEventListener("change", async (e) => {
   rebuildTable();
 });
 
-// ===== Rekonstrukce tabulky z CSV + ručního vstupu =====
+// ===== Rekonstrukce tabulky =====
 
 function rebuildTable() {
   const manualRows = parseManualInput();
@@ -190,7 +196,16 @@ function rebuildTable() {
     tdIndex.textContent = idx + 1;
     tdAddr.textContent = r.sourceAddress;
     tdAmount.textContent = r.amountStr;
-    tdStatus.textContent = "Čeká";
+
+    // Validace adresy
+    try {
+      ethers.utils.getAddress(r.sourceAddress);
+      tdStatus.textContent = "OK";
+      tr.classList.add("ok-row");
+    } catch {
+      tdStatus.textContent = "Neplatná adresa";
+      tr.classList.add("bad-row");
+    }
 
     tr.appendChild(tdIndex);
     tr.appendChild(tdAddr);
@@ -213,15 +228,15 @@ function rebuildTable() {
 
 manualInput.addEventListener("input", rebuildTable);
 
-// ===== Výpočet částky podle režimu =====
+// ===== Výpočet částky =====
 
 async function computeAmountToSend(sourceAddress, amountStrFromCsv) {
   const mode = getMode();
 
   if (mode === "csv") {
-    if (!amountStrFromCsv || amountStrFromCsv.trim() === "") {
-      throw new Error("V režimu CSV chybí částka.");
-    }
+    if (!amountStrFromCsv) throw new Error("Chybí částka");
+    if (!/^[0-9]+(\.[0-9]+)?$/.test(amountStrFromCsv))
+      throw new Error("Neplatné číslo (použij tečku)");
     return ethers.utils.parseUnits(amountStrFromCsv, decimals);
   }
 
@@ -237,8 +252,7 @@ async function computeAmountToSend(sourceAddress, amountStrFromCsv) {
       throw new Error("Neplatné procento.");
     }
     const fraction = percent / 100;
-    const amount = balance.mul(ethers.BigNumber.from(Math.floor(fraction * 10000))).div(10000);
-    return amount;
+    return balance.mul(Math.floor(fraction * 10000)).div(10000);
   }
 
   throw new Error("Neznámý režim.");
@@ -263,18 +277,16 @@ async function sendAll() {
   for (const row of rows) {
     const { sourceAddress, amountStr, statusCell, rowElement, index } = row;
 
-    // 1) Kontrola, že aktivní adresa = zdrojová
+    // 1) Kontrola aktivní adresy
     const ok = await ensureCorrectSigner(sourceAddress);
     if (!ok) {
-      rowElement.classList.remove("ok-row");
       rowElement.classList.add("bad-row");
-      statusCell.textContent = "Špatná aktivní adresa v Rabby";
-      log(`Řádek ${index}: Špatná aktivní adresa v Rabby. Proces zastaven.`);
+      statusCell.textContent = "Špatná aktivní adresa";
+      log(`Řádek ${index}: Špatná aktivní adresa. Proces zastaven.`);
       sendBtn.disabled = false;
-      return; // tvrdé zastavení – uživatel přepne adresu a spustí znovu
+      return;
     }
 
-    rowElement.classList.remove("bad-row");
     rowElement.classList.add("ok-row");
     statusCell.textContent = "Ověřeno, počítám částku…";
 
@@ -290,34 +302,32 @@ async function sendAll() {
 
     if (amount.isZero()) {
       statusCell.textContent = "Nulová částka, přeskočeno";
-      log(`Řádek ${index}: Nulová částka, přeskočeno.`);
+      log(`Řádek ${index}: Nulová částka.`);
       continue;
     }
 
     const humanAmount = ethers.utils.formatUnits(amount, decimals);
-    statusCell.textContent = "Ověřeno, odesílám " + humanAmount + " BET…";
+    statusCell.textContent = "Odesílám " + humanAmount + " BET…";
 
     // 3) Odeslání transakce
     try {
-      log(`Řádek ${index}: Připravuji transakci z ${sourceAddress} na ${humanAmount} BET.`);
+      log(`Řádek ${index}: Odesílám ${humanAmount} BET z ${sourceAddress}.`);
       const tx = await betContract.transfer(TARGET_ADDRESS, amount);
-      log(`Řádek ${index}: Odesláno, čekám na potvrzení... Tx: ${tx.hash}`);
-      statusCell.textContent = "Odesláno, čeká na potvrzení";
+      log(`Řádek ${index}: Tx: ${tx.hash}`);
+      statusCell.textContent = "Čeká na potvrzení…";
 
       const receipt = await tx.wait();
       if (receipt.status === 1) {
         statusCell.textContent = "Hotovo";
         log(`Řádek ${index}: Transakce potvrzena.`);
       } else {
-        statusCell.textContent = "Selhalo (receipt.status != 1)";
-        log(`Řádek ${index}: Transakce selhala (receipt.status != 1).`);
+        statusCell.textContent = "Selhalo";
+        log(`Řádek ${index}: Selhalo (receipt.status != 1).`);
       }
     } catch (err) {
-      statusCell.textContent = "Chyba při odesílání";
+      statusCell.textContent = "Chyba";
       rowElement.classList.add("bad-row");
-      log(
-        `Řádek ${index}: Chyba při odesílání z ${sourceAddress}: ${err.message || err}`
-      );
+      log(`Řádek ${index}: Chyba: ${err.message}`);
       continue;
     }
   }
@@ -326,7 +336,7 @@ async function sendAll() {
   sendBtn.disabled = false;
 }
 
-// ===== Export logu do CSV =====
+// ===== Export logu =====
 
 function exportLogToCsv() {
   if (logLines.length === 0) {
@@ -362,7 +372,6 @@ connectBtn.addEventListener("click", connectWallet);
 sendBtn.addEventListener("click", sendAll);
 exportLogBtn.addEventListener("click", exportLogToCsv);
 
-// při loadu zkusíme načíst aktivní adresu (pokud už je peněženka připojená)
 window.addEventListener("load", () => {
   if (window.ethereum) {
     provider = new ethers.providers.Web3Provider(window.ethereum, "any");
